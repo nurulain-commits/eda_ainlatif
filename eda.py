@@ -6,6 +6,7 @@ import plotly.express as px
 import streamlit.components.v1 as components
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
+from scipy.signal import find_peaks
 
 # =========================
 # Page configuration
@@ -283,22 +284,24 @@ if uploaded_file is not None:
                     st.success("Interaction feature created successfully!")
 
     # =========================
-    # K-Means Clustering Section
+    # K-Means Clustering Section (Based on Maximum Peak Values)
     # =========================
-    st.subheader("K-Means Clustering Analysis")
+    st.subheader("K-Means Clustering Analysis - Maximum Peak Values")
+    
+    st.write("This section clusters signals based on their maximum peak values.")
     
     numeric_cols_km = df.select_dtypes(include=np.number).columns.tolist()
     
-    if len(numeric_cols_km) >= 2:
-        col1, col2 = st.columns(2)
+    if len(numeric_cols_km) >= 1:
+        col1, col2, col3 = st.columns(3)
         
         with col1:
-            # Select columns for clustering
-            clustering_cols = st.multiselect(
-                "Select numerical columns for clustering",
+            # Select signal columns (columns representing the signal values)
+            signal_cols = st.multiselect(
+                "Select signal columns (each row is a signal)",
                 numeric_cols_km,
-                default=numeric_cols_km[:2] if len(numeric_cols_km) >= 2 else numeric_cols_km,
-                key="clustering_cols"
+                default=numeric_cols_km,
+                key="signal_cols"
             )
         
         with col2:
@@ -308,97 +311,128 @@ if uploaded_file is not None:
                 min_value=2,
                 max_value=10,
                 value=3,
-                key="n_clusters"
+                key="n_clusters_peak"
             )
         
-        if clustering_cols:
-            if st.button("Run K-Means Clustering"):
+        with col3:
+            # Option to use absolute peak value
+            use_abs_peak = st.checkbox(
+                "Use absolute peak value",
+                value=True,
+                key="use_abs_peak"
+            )
+        
+        if signal_cols:
+            if st.button("Run K-Means Clustering on Peak Values"):
                 try:
-                    # Prepare data
-                    X = df[clustering_cols].copy()
+                    # Extract maximum peak value for each signal (row)
+                    peak_values = []
+                    for idx, row in df[signal_cols].iterrows():
+                        signal_data = row.values.astype(float)
+                        if use_abs_peak:
+                            # Use absolute maximum value
+                            max_peak = np.max(np.abs(signal_data))
+                        else:
+                            # Use maximum value
+                            max_peak = np.max(signal_data)
+                        peak_values.append(max_peak)
                     
-                    # Handle missing values if any
-                    if X.isnull().any().any():
-                        st.warning("Missing values detected in selected columns. Dropping rows with missing values.")
-                        X = X.dropna()
+                    # Create dataframe with peak values
+                    peak_df = pd.DataFrame({
+                        'Max_Peak_Value': peak_values
+                    })
                     
-                    # Standardize the features
-                    scaler = StandardScaler()
-                    X_scaled = scaler.fit_transform(X)
+                    # Handle any NaN or infinite values
+                    peak_df = peak_df.replace([np.inf, -np.inf], np.nan)
+                    peak_df = peak_df.dropna()
                     
-                    # Apply K-Means
-                    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-                    clusters = kmeans.fit_predict(X_scaled)
-                    
-                    # Add cluster labels to dataframe
-                    df_plot = X.copy()
-                    df_plot['Cluster'] = clusters
-                    
-                    st.success(f"K-Means clustering completed with {n_clusters} clusters!")
-                    
-                    # Display cluster information
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Total Clusters", n_clusters)
-                    col2.metric("Inertia", f"{kmeans.inertia_:.2f}")
-                    col3.metric("Data Points", len(df_plot))
-                    
-                    # Display cluster distribution
-                    st.write("**Cluster Distribution:**")
-                    cluster_counts = pd.Series(clusters).value_counts().sort_index()
-                    fig_cluster_dist = px.bar(
-                        x=cluster_counts.index.astype(str),
-                        y=cluster_counts.values,
-                        labels={"x": "Cluster", "y": "Number of Points"},
-                        title="Number of Points per Cluster"
-                    )
-                    st.plotly_chart(fig_cluster_dist, use_container_width=True)
-                    
-                    # Visualization - 2D scatter plot
-                    if len(clustering_cols) >= 2:
-                        fig_scatter = px.scatter(
-                            df_plot,
-                            x=clustering_cols[0],
-                            y=clustering_cols[1],
-                            color='Cluster',
-                            title=f"K-Means Clustering: {clustering_cols[0]} vs {clustering_cols[1]}",
-                            color_continuous_scale="Viridis",
-                            hover_data=clustering_cols
+                    if len(peak_df) == 0:
+                        st.error("No valid peak values found in the data.")
+                    else:
+                        # Standardize the peak values
+                        scaler = StandardScaler()
+                        X_scaled = scaler.fit_transform(peak_df[['Max_Peak_Value']])
+                        
+                        # Apply K-Means
+                        kmeans = KMeans(n_clusters=min(n_clusters, len(peak_df)), random_state=42, n_init=10)
+                        clusters = kmeans.fit_predict(X_scaled)
+                        
+                        st.success(f"K-Means clustering completed with {len(np.unique(clusters))} clusters!")
+                        
+                        # Display cluster information
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric("Total Clusters", len(np.unique(clusters)))
+                        col2.metric("Inertia", f"{kmeans.inertia_:.2f}")
+                        col3.metric("Data Points", len(peak_df))
+                        
+                        # Create results dataframe
+                        results_df = df[signal_cols].copy()
+                        results_df['Max_Peak_Value'] = peak_values
+                        results_df['KMeans_Cluster'] = clusters
+                        
+                        # Display cluster distribution
+                        st.write("**Cluster Distribution:**")
+                        cluster_counts = pd.Series(clusters).value_counts().sort_index()
+                        fig_cluster_dist = px.bar(
+                            x=cluster_counts.index.astype(str),
+                            y=cluster_counts.values,
+                            labels={"x": "Cluster", "y": "Number of Signals"},
+                            title="Number of Signals per Cluster"
                         )
-                        st.plotly_chart(fig_scatter, use_container_width=True)
-                    
-                    # Visualization - 3D scatter plot if 3+ columns selected
-                    if len(clustering_cols) >= 3:
-                        fig_3d = px.scatter_3d(
-                            df_plot,
-                            x=clustering_cols[0],
-                            y=clustering_cols[1],
-                            z=clustering_cols[2],
-                            color='Cluster',
-                            title="3D K-Means Clustering Visualization",
+                        st.plotly_chart(fig_cluster_dist, use_container_width=True)
+                        
+                        # Visualization - Distribution of peak values by cluster
+                        fig_peak_dist = px.box(
+                            results_df,
+                            x='KMeans_Cluster',
+                            y='Max_Peak_Value',
+                            title="Maximum Peak Value Distribution by Cluster",
+                            labels={"KMeans_Cluster": "Cluster", "Max_Peak_Value": "Max Peak Value"}
+                        )
+                        st.plotly_chart(fig_peak_dist, use_container_width=True)
+                        
+                        # Visualization - Scatter plot
+                        scatter_data = results_df.copy()
+                        scatter_data['Index'] = range(len(scatter_data))
+                        fig_scatter = px.scatter(
+                            scatter_data,
+                            x='Index',
+                            y='Max_Peak_Value',
+                            color='KMeans_Cluster',
+                            title="Signal Index vs Maximum Peak Value (Colored by Cluster)",
+                            labels={"Index": "Signal Index", "Max_Peak_Value": "Maximum Peak Value", "KMeans_Cluster": "Cluster"},
                             color_continuous_scale="Viridis"
                         )
-                        st.plotly_chart(fig_3d, use_container_width=True)
-                    
-                    # Cluster centers
-                    st.write("**Cluster Centers (Original Scale):**")
-                    centers_original = scaler.inverse_transform(kmeans.cluster_centers_)
-                    centers_df = pd.DataFrame(
-                        centers_original,
-                        columns=clustering_cols
-                    )
-                    st.dataframe(centers_df, use_container_width=True)
-                    
-                    # Add clusters to main dataframe
-                    df['KMeans_Cluster'] = clusters
-                    
-                    # Display clustered data sample
-                    st.write("**Sample of Clustered Data:**")
-                    st.dataframe(df[[*clustering_cols, 'KMeans_Cluster']].head(20), use_container_width=True)
-                    
+                        st.plotly_chart(fig_scatter, use_container_width=True)
+                        
+                        # Cluster statistics
+                        st.write("**Cluster Statistics:**")
+                        cluster_stats = results_df.groupby('KMeans_Cluster')['Max_Peak_Value'].agg(['count', 'mean', 'min', 'max', 'std'])
+                        cluster_stats.columns = ['Count', 'Mean Peak', 'Min Peak', 'Max Peak', 'Std Dev']
+                        st.dataframe(cluster_stats, use_container_width=True)
+                        
+                        # Cluster centers
+                        st.write("**Cluster Centers (Original Scale):**")
+                        centers_original = scaler.inverse_transform(kmeans.cluster_centers_)
+                        centers_df = pd.DataFrame(
+                            centers_original,
+                            columns=['Max_Peak_Value']
+                        )
+                        st.dataframe(centers_df, use_container_width=True)
+                        
+                        # Display clustered data sample
+                        st.write("**Sample of Clustered Signals (First 20):**")
+                        display_cols = signal_cols + ['Max_Peak_Value', 'KMeans_Cluster']
+                        st.dataframe(results_df[display_cols].head(20), use_container_width=True)
+                        
+                        # Add clusters to main dataframe
+                        df['Max_Peak_Value'] = peak_values
+                        df['KMeans_Cluster'] = clusters
+                        
                 except Exception as e:
                     st.error(f"Error during clustering: {str(e)}")
     else:
-        st.warning("At least 2 numerical columns are required for clustering.")
+        st.warning("At least 1 numerical column is required for clustering.")
 
     # =========================
     # D-Tale Section
