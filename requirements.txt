@@ -3,3 +3,4 @@ numpy
 streamlit
 plotly
 dtale
+scikit-learn
