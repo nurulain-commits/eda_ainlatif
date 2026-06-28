@@ -4,6 +4,8 @@ import numpy as np
 import dtale
 import plotly.express as px
 import streamlit.components.v1 as components
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
 
 # =========================
 # Page configuration
@@ -279,6 +281,124 @@ if uploaded_file is not None:
                         df[f"{col_1}_div_{col_2}"] = df[col_1] / df[col_2].replace(0, np.nan)
                     
                     st.success("Interaction feature created successfully!")
+
+    # =========================
+    # K-Means Clustering Section
+    # =========================
+    st.subheader("K-Means Clustering Analysis")
+    
+    numeric_cols_km = df.select_dtypes(include=np.number).columns.tolist()
+    
+    if len(numeric_cols_km) >= 2:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Select columns for clustering
+            clustering_cols = st.multiselect(
+                "Select numerical columns for clustering",
+                numeric_cols_km,
+                default=numeric_cols_km[:2] if len(numeric_cols_km) >= 2 else numeric_cols_km,
+                key="clustering_cols"
+            )
+        
+        with col2:
+            # Select number of clusters
+            n_clusters = st.slider(
+                "Number of clusters (k)",
+                min_value=2,
+                max_value=10,
+                value=3,
+                key="n_clusters"
+            )
+        
+        if clustering_cols:
+            if st.button("Run K-Means Clustering"):
+                try:
+                    # Prepare data
+                    X = df[clustering_cols].copy()
+                    
+                    # Handle missing values if any
+                    if X.isnull().any().any():
+                        st.warning("Missing values detected in selected columns. Dropping rows with missing values.")
+                        X = X.dropna()
+                    
+                    # Standardize the features
+                    scaler = StandardScaler()
+                    X_scaled = scaler.fit_transform(X)
+                    
+                    # Apply K-Means
+                    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+                    clusters = kmeans.fit_predict(X_scaled)
+                    
+                    # Add cluster labels to dataframe
+                    df_plot = X.copy()
+                    df_plot['Cluster'] = clusters
+                    
+                    st.success(f"K-Means clustering completed with {n_clusters} clusters!")
+                    
+                    # Display cluster information
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Total Clusters", n_clusters)
+                    col2.metric("Inertia", f"{kmeans.inertia_:.2f}")
+                    col3.metric("Data Points", len(df_plot))
+                    
+                    # Display cluster distribution
+                    st.write("**Cluster Distribution:**")
+                    cluster_counts = pd.Series(clusters).value_counts().sort_index()
+                    fig_cluster_dist = px.bar(
+                        x=cluster_counts.index.astype(str),
+                        y=cluster_counts.values,
+                        labels={"x": "Cluster", "y": "Number of Points"},
+                        title="Number of Points per Cluster"
+                    )
+                    st.plotly_chart(fig_cluster_dist, use_container_width=True)
+                    
+                    # Visualization - 2D scatter plot
+                    if len(clustering_cols) >= 2:
+                        fig_scatter = px.scatter(
+                            df_plot,
+                            x=clustering_cols[0],
+                            y=clustering_cols[1],
+                            color='Cluster',
+                            title=f"K-Means Clustering: {clustering_cols[0]} vs {clustering_cols[1]}",
+                            color_continuous_scale="Viridis",
+                            hover_data=clustering_cols
+                        )
+                        st.plotly_chart(fig_scatter, use_container_width=True)
+                    
+                    # Visualization - 3D scatter plot if 3+ columns selected
+                    if len(clustering_cols) >= 3:
+                        fig_3d = px.scatter_3d(
+                            df_plot,
+                            x=clustering_cols[0],
+                            y=clustering_cols[1],
+                            z=clustering_cols[2],
+                            color='Cluster',
+                            title="3D K-Means Clustering Visualization",
+                            color_continuous_scale="Viridis"
+                        )
+                        st.plotly_chart(fig_3d, use_container_width=True)
+                    
+                    # Cluster centers
+                    st.write("**Cluster Centers (Original Scale):**")
+                    centers_original = scaler.inverse_transform(kmeans.cluster_centers_)
+                    centers_df = pd.DataFrame(
+                        centers_original,
+                        columns=clustering_cols
+                    )
+                    st.dataframe(centers_df, use_container_width=True)
+                    
+                    # Add clusters to main dataframe
+                    df['KMeans_Cluster'] = clusters
+                    
+                    # Display clustered data sample
+                    st.write("**Sample of Clustered Data:**")
+                    st.dataframe(df[[*clustering_cols, 'KMeans_Cluster']].head(20), use_container_width=True)
+                    
+                except Exception as e:
+                    st.error(f"Error during clustering: {str(e)}")
+    else:
+        st.warning("At least 2 numerical columns are required for clustering.")
 
     # =========================
     # D-Tale Section
