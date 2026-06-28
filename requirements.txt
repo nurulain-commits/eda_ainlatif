@@ -4,3 +4,4 @@ streamlit
 plotly
 dtale
 scikit-learn
+scipy
